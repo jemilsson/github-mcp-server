@@ -43,22 +43,28 @@ var (
 			installationIDStr := viper.GetString("app_installation_id")
 			privateKeyPath := viper.GetString("app_private_key_path")
 
-			if appIDStr != "" && installationIDStr != "" && privateKeyPath != "" {
+			if appIDStr != "" && privateKeyPath != "" {
 				appID, err := strconv.ParseInt(appIDStr, 10, 64)
 				if err != nil {
 					return fmt.Errorf("invalid GITHUB_APP_ID: %w", err)
 				}
-				installationID, err := strconv.ParseInt(installationIDStr, 10, 64)
-				if err != nil {
-					return fmt.Errorf("invalid GITHUB_APP_INSTALLATION_ID: %w", err)
+
+				// Installation ID is optional; if omitted, installations are auto-discovered
+				var installationID int64
+				if installationIDStr != "" {
+					installationID, err = strconv.ParseInt(installationIDStr, 10, 64)
+					if err != nil {
+						return fmt.Errorf("invalid GITHUB_APP_INSTALLATION_ID: %w", err)
+					}
 				}
+
 				provider, err := auth.NewAppTokenProvider(appID, installationID, privateKeyPath, viper.GetString("host"))
 				if err != nil {
 					return fmt.Errorf("failed to initialize GitHub App auth: %w", err)
 				}
 				appTokenProvider = provider
 
-				// Get an initial token so the server can start
+				// Get an initial token so the server can start (also triggers installation discovery)
 				initialToken, err := provider.Token()
 				if err != nil {
 					return fmt.Errorf("failed to get initial GitHub App token: %w", err)
@@ -67,7 +73,7 @@ var (
 			}
 
 			if token == "" {
-				return errors.New("authentication required: set GITHUB_PERSONAL_ACCESS_TOKEN, or set GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY_PATH for GitHub App auth")
+				return errors.New("authentication required: set GITHUB_PERSONAL_ACCESS_TOKEN, or set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH for GitHub App auth")
 			}
 
 			// If you're wondering why we're not using viper.GetStringSlice("toolsets"),
