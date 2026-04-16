@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/github/github-mcp-server/pkg/auth"
 	gherrors "github.com/github/github-mcp-server/pkg/errors"
 	"github.com/github/github-mcp-server/pkg/inventory"
 	"github.com/github/github-mcp-server/pkg/octicons"
@@ -25,6 +26,10 @@ type MCPServerConfig struct {
 
 	// GitHub Token to authenticate with the GitHub API
 	Token string
+
+	// AppTokenProvider provides dynamic GitHub App installation tokens.
+	// When set, the server uses this for token refresh instead of the static Token.
+	AppTokenProvider *auth.AppTokenProvider
 
 	// EnabledToolsets is a list of toolsets to enable
 	// See: https://github.com/github/github-mcp-server?tab=readme-ov-file#tool-configuration

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/github/github-mcp-server/pkg/auth"
 	"github.com/github/github-mcp-server/pkg/errors"
 	"github.com/github/github-mcp-server/pkg/github"
 	"github.com/github/github-mcp-server/pkg/http/transport"
@@ -61,20 +62,45 @@ func createGitHubClients(cfg github.MCPServerConfig, apiHost utils.APIHostResolv
 	}
 
 	// Construct REST client
-	restClient := gogithub.NewClient(nil).WithAuthToken(cfg.Token)
-	restClient.UserAgent = fmt.Sprintf("github-mcp-server/%s", cfg.Version)
-	restClient.BaseURL = restURL
-	restClient.UploadURL = uploadURL
+	var restClient *gogithub.Client
+	var gqlHTTPClient *http.Client
 
-	// Construct GraphQL client
-	// We use NewEnterpriseClient unconditionally since we already parsed the API host
-	gqlHTTPClient := &http.Client{
-		Transport: &transport.BearerAuthTransport{
-			Transport: &transport.GraphQLFeaturesTransport{
+	if cfg.AppTokenProvider != nil {
+		// Use dynamic token provider for GitHub App auth
+		restHTTPClient := &http.Client{
+			Transport: &auth.DynamicBearerTransport{
 				Transport: http.DefaultTransport,
+				Provider:  cfg.AppTokenProvider,
 			},
-			Token: cfg.Token,
-		},
+		}
+		restClient = gogithub.NewClient(restHTTPClient)
+		restClient.UserAgent = fmt.Sprintf("github-mcp-server/%s", cfg.Version)
+		restClient.BaseURL = restURL
+		restClient.UploadURL = uploadURL
+
+		gqlHTTPClient = &http.Client{
+			Transport: &auth.DynamicBearerTransport{
+				Transport: &transport.GraphQLFeaturesTransport{
+					Transport: http.DefaultTransport,
+				},
+				Provider: cfg.AppTokenProvider,
+			},
+		}
+	} else {
+		// Use static token for PAT auth
+		restClient = gogithub.NewClient(nil).WithAuthToken(cfg.Token)
+		restClient.UserAgent = fmt.Sprintf("github-mcp-server/%s", cfg.Version)
+		restClient.BaseURL = restURL
+		restClient.UploadURL = uploadURL
+
+		gqlHTTPClient = &http.Client{
+			Transport: &transport.BearerAuthTransport{
+				Transport: &transport.GraphQLFeaturesTransport{
+					Transport: http.DefaultTransport,
+				},
+				Token: cfg.Token,
+			},
+		}
 	}
 
 	gqlClient := githubv4.NewEnterpriseClient(graphQLURL.String(), gqlHTTPClient)
@@ -184,6 +210,10 @@ type StdioServerConfig struct {
 	// GitHub Token to authenticate with the GitHub API
 	Token string
 
+	// AppTokenProvider provides dynamic GitHub App installation tokens.
+	// When set, the server uses this for token refresh instead of the static Token.
+	AppTokenProvider *auth.AppTokenProvider
+
 	// EnabledToolsets is a list of toolsets to enable
 	// See: https://github.com/github/github-mcp-server?tab=readme-ov-file#tool-configuration
 	EnabledToolsets []string
@@ -253,7 +283,11 @@ func RunStdioServer(cfg StdioServerConfig) error {
 		slogHandler = slog.NewTextHandler(logOutput, &slog.HandlerOptions{Level: slog.LevelInfo})
 	}
 	logger := slog.New(slogHandler)
-	logger.Info("starting server", "version", cfg.Version, "host", cfg.Host, "dynamicToolsets", cfg.DynamicToolsets, "readOnly", cfg.ReadOnly, "lockdownEnabled", cfg.LockdownMode)
+	authMode := "pat"
+	if cfg.AppTokenProvider != nil {
+		authMode = "github-app"
+	}
+	logger.Info("starting server", "version", cfg.Version, "host", cfg.Host, "authMode", authMode, "dynamicToolsets", cfg.DynamicToolsets, "readOnly", cfg.ReadOnly, "lockdownEnabled", cfg.LockdownMode)
 
 	// Fetch token scopes for scope-based tool filtering (PAT tokens only)
 	// Only classic PATs (ghp_ prefix) return OAuth scopes via X-OAuth-Scopes header.
@@ -275,6 +309,7 @@ func RunStdioServer(cfg StdioServerConfig) error {
 		Version:           cfg.Version,
 		Host:              cfg.Host,
 		Token:             cfg.Token,
+		AppTokenProvider:  cfg.AppTokenProvider,
 		EnabledToolsets:   cfg.EnabledToolsets,
 		EnabledTools:      cfg.EnabledTools,
 		EnabledFeatures:   cfg.EnabledFeatures,

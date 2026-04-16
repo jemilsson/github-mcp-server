@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/github/github-mcp-server/internal/ghmcp"
+	"github.com/github/github-mcp-server/pkg/auth"
 	"github.com/github/github-mcp-server/pkg/github"
 	ghhttp "github.com/github/github-mcp-server/pkg/http"
 	"github.com/spf13/cobra"
@@ -34,8 +36,38 @@ var (
 		Long:  `Start a server that communicates via standard input/output streams using JSON-RPC messages.`,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			token := viper.GetString("personal_access_token")
+
+			// Check for GitHub App authentication as an alternative to PAT
+			var appTokenProvider *auth.AppTokenProvider
+			appIDStr := viper.GetString("app_id")
+			installationIDStr := viper.GetString("app_installation_id")
+			privateKeyPath := viper.GetString("app_private_key_path")
+
+			if appIDStr != "" && installationIDStr != "" && privateKeyPath != "" {
+				appID, err := strconv.ParseInt(appIDStr, 10, 64)
+				if err != nil {
+					return fmt.Errorf("invalid GITHUB_APP_ID: %w", err)
+				}
+				installationID, err := strconv.ParseInt(installationIDStr, 10, 64)
+				if err != nil {
+					return fmt.Errorf("invalid GITHUB_APP_INSTALLATION_ID: %w", err)
+				}
+				provider, err := auth.NewAppTokenProvider(appID, installationID, privateKeyPath, viper.GetString("host"))
+				if err != nil {
+					return fmt.Errorf("failed to initialize GitHub App auth: %w", err)
+				}
+				appTokenProvider = provider
+
+				// Get an initial token so the server can start
+				initialToken, err := provider.Token()
+				if err != nil {
+					return fmt.Errorf("failed to get initial GitHub App token: %w", err)
+				}
+				token = initialToken
+			}
+
 			if token == "" {
-				return errors.New("GITHUB_PERSONAL_ACCESS_TOKEN not set")
+				return errors.New("authentication required: set GITHUB_PERSONAL_ACCESS_TOKEN, or set GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and GITHUB_APP_PRIVATE_KEY_PATH for GitHub App auth")
 			}
 
 			// If you're wondering why we're not using viper.GetStringSlice("toolsets"),
@@ -82,6 +114,7 @@ var (
 				Version:              version,
 				Host:                 viper.GetString("host"),
 				Token:                token,
+				AppTokenProvider:     appTokenProvider,
 				EnabledToolsets:      enabledToolsets,
 				EnabledTools:         enabledTools,
 				EnabledFeatures:      enabledFeatures,
